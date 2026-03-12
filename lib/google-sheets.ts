@@ -39,25 +39,43 @@ export async function markCodeDelivered(sheetName: string, row: number, orderId:
 }
 
 export async function getInventory(): Promise<{ counts: Record<string, { available: number; delivered: number }> }> {
-  const url = getGoogleScriptUrl()
-  const response = await fetch(`${url}?action=inventory`)
-  
-  if (!response.ok) {
-    throw new Error(`Error getting inventory: ${response.statusText}`)
+  try {
+    const url = getGoogleScriptUrl()
+    const response = await fetch(`${url}?action=inventory`, {
+      next: { revalidate: 0 }
+    })
+    
+    if (!response.ok) {
+      console.error('[v0] getInventory error:', response.status, response.statusText)
+      return { counts: {} }
+    }
+    
+    return response.json()
+  } catch (error) {
+    console.error('[v0] getInventory exception:', error)
+    return { counts: {} }
   }
-  
-  return response.json()
 }
 
 export async function getBotState(): Promise<{ enabled: boolean; activatedAt: string | null }> {
-  const url = getGoogleScriptUrl()
-  const response = await fetch(`${url}?action=getBotState`)
-  
-  if (!response.ok) {
-    throw new Error(`Error getting bot state: ${response.statusText}`)
+  try {
+    const url = getGoogleScriptUrl()
+    const response = await fetch(`${url}?action=getBotState`, {
+      next: { revalidate: 0 }
+    })
+    
+    if (!response.ok) {
+      console.error('[v0] getBotState error:', response.status, response.statusText)
+      // Return default state if Google Sheets fails
+      return { enabled: true, activatedAt: new Date().toISOString() }
+    }
+    
+    return response.json()
+  } catch (error) {
+    console.error('[v0] getBotState exception:', error)
+    // Return default state on error
+    return { enabled: true, activatedAt: new Date().toISOString() }
   }
-  
-  return response.json()
 }
 
 export async function setBotState(enabled: boolean, activatedAt: string | null): Promise<{ ok: boolean }> {

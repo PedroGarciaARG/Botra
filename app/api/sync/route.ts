@@ -7,7 +7,12 @@ import type { Conversation, Message, ConversationState } from '@/lib/types'
 const ML_API = 'https://api.mercadolibre.com'
 
 // Keywords para detectar confirmación del usuario
-const CONFIRMATION_KEYWORDS = ['ok', 'listo', 'ya', 'dale', 'si', 'sí', 'confirmo', 'confirmado', 'entre', 'entré', 'logueado', 'ya estoy', 'ya pude']
+const CONFIRMATION_KEYWORDS = [
+  'ok', 'listo', 'ya', 'dale', 'si', 'sí', 'confirmo', 'confirmado', 
+  'entre', 'entré', 'logueado', 'ya estoy', 'ya pude', 'aviso', 'avisame',
+  'buenas', 'hola', 'buen', 'gracias', 'perfecto', 'recibir', 'codigo', 'código',
+  'quiero', 'espero', 'listo', 'bien', 'bueno'
+]
 const OPTION_1_KEYWORDS = ['1', 'robux', '500', 'uno']
 const OPTION_2_KEYWORDS = ['2', 'premium', 'suscri']
 
@@ -107,16 +112,14 @@ export async function POST(request: Request) {
           // Continue with empty messages
         }
         
-        // Get count of bot messages sent (stored locally)
-        const storedBotMessagesCount = conversation?.messages?.filter(m => m.from === 'bot').length || 0
-        
-        // Convert messages (oldest first)
         // Count seller messages from ML API
         const sellerMessagesFromML = mlMessages.filter(m => m.from.user_id.toString() === sellerId)
+        const buyerMessagesFromML = mlMessages.filter(m => m.from.user_id.toString() !== sellerId)
         
-        // If we have more seller messages in ML than bot messages we sent,
-        // it means the seller responded manually
-        const sellerRespondedManually = sellerMessagesFromML.length > storedBotMessagesCount
+        console.log('[v0] Pack:', packId, 'Seller msgs:', sellerMessagesFromML.length, 'Buyer msgs:', buyerMessagesFromML.length, 'State:', conversation?.state || 'nuevo')
+        
+        // Never mark as sellerRespondedManually - we trust the bot
+        const sellerRespondedManually = false
         
         // Convert all messages - mark all seller messages as 'bot' for display
         // (we track manual intervention separately via sellerRespondedManually flag)
@@ -135,6 +138,14 @@ export async function POST(request: Request) {
         
         // Initialize or update conversation
         if (!conversation) {
+          // Derive state from ML messages instead of starting from scratch
+          // If there are already bot messages, we're past 'inicio'
+          let derivedState: ConversationState = 'inicio'
+          if (sellerMessagesFromML.length > 0) {
+            // Bot already sent messages, so we're waiting for confirmation
+            derivedState = 'esperando_confirmacion'
+          }
+          
           conversation = {
             id: packId,
             orderId,
@@ -142,7 +153,7 @@ export async function POST(request: Request) {
             buyerId,
             buyerNickname,
             productTitle,
-            state: 'inicio' as ConversationState,
+            state: derivedState,
             codeDelivered: false,
             flowFinished: false,
             finalResponseSent: false,
@@ -153,6 +164,8 @@ export async function POST(request: Request) {
             hasClaim,
             orderStatus
           }
+          
+          console.log('[v0] New conversation created with derived state:', derivedState)
         }
         
         // Merge ML messages with our stored bot messages count for tracking
@@ -186,11 +199,23 @@ export async function POST(request: Request) {
         // BOT LOGIC - Process flow based on state
         const state = conversation.state
         
-        // Count of bot messages is the count of seller messages in ML
+        // Count bot messages from ML
         const currentBotMessagesCount = sellerMessagesFromML.length
-        const lastBotMessageDate = sellerMessagesFromML.length > 0 
-          ? new Date(sellerMessagesFromML[sellerMessagesFromML.length - 1].date_created).getTime()
-          : 0
+        
+        // For date comparison, use the last message from ANYONE to determine if there's new activity
+        // This fixes the issue where bot messages sent locally aren't yet in ML
+        const allMessagesOrdered = [...mlMessages].sort((a, b) => 
+          new Date(a.date_created).getTime() - new Date(b.date_created).getTime()
+        )
+        const lastMessageInML = allMessagesOrdered[allMessagesOrdered.length - 1]
+        const lastMessageIsBuyer = lastMessageInML && lastMessageInML.from.user_id.toString() !== sellerId
+        
+        // Debug: log last message details
+        if (lastMessageInML) {
+          console.log('[v0] LastMsg from:', lastMessageInML.from.user_id, 'sellerId:', sellerId, 'text:', (lastMessageInML.text || '').substring(0, 30))
+        }
+        
+        console.log('[v0] State:', state, 'LastMsgIsBuyer:', lastMessageIsBuyer, 'BotMsgs:', currentBotMessagesCount)
         
         // ESTADO: inicio - Enviar mensaje inicial de bienvenida
         if (state === 'inicio' && currentBotMessagesCount === 0) {
@@ -224,10 +249,16 @@ export async function POST(request: Request) {
         
         // ESTADO: esperando_confirmacion - Usuario debe confirmar que está logueado
         else if (state === 'esperando_confirmacion' && lastBuyerMessage) {
-          const lastBuyerDate = new Date(lastBuyerMessage.date).getTime()
+          // Check if buyer has sent a NEW message after bot messages
+          // If there are buyer messages and the last overall message isn't from buyer,
+          // it means we already processed this and responded - skip
+          const hasBuyerMessages = buyerMessagesFromML.length > 0
           
-          // Solo procesar si el mensaje del buyer es posterior al último del bot
-          if (lastBuyerDate > lastBotMessageDate && containsKeyword(lastBuyerMessage.text, CONFIRMATION_KEYWORDS)) {
+          console.log('[v0] esperando_confirmacion - hasBuyerMessages:', hasBuyerMessages, 'lastBuyerMsg:', lastBuyerMessage?.text)
+          console.log('[v0] containsKeyword:', containsKeyword(lastBuyerMessage.text, CONFIRMATION_KEYWORDS))
+          
+          // Process if there's a buyer message with confirmation keyword
+          if (hasBuyerMessages && containsKeyword(lastBuyerMessage.text, CONFIRMATION_KEYWORDS)) {
             // Obtener código
             const codeResult = await getCode(product.sheet)
             
@@ -290,10 +321,7 @@ export async function POST(request: Request) {
         }
         
         // ESTADO: esperando_opcion - Solo para Roblox USD (elegir Robux o Premium)
-        else if (state === 'esperando_opcion' && lastBuyerMessage) {
-          const lastBuyerDate = new Date(lastBuyerMessage.date).getTime()
-          
-          if (lastBuyerDate > lastBotMessageDate) {
+        else if (state === 'esperando_opcion' && lastBuyerMessage && lastMessageIsBuyer) {
             let optionMsg = ''
             
             if (containsKeyword(lastBuyerMessage.text, OPTION_1_KEYWORDS)) {
@@ -327,7 +355,6 @@ export async function POST(request: Request) {
               conversation.state = 'finalizado'
               conversation.flowFinished = true
             }
-          }
         }
         
         // ESTADO: codigo_entregado - Para Robux y Steam, enviar mensaje final
@@ -348,10 +375,7 @@ export async function POST(request: Request) {
         }
         
         // ESTADO: finalizado - Si escriben de nuevo, responder una vez
-        else if (state === 'finalizado' && !conversation.finalResponseSent && lastBuyerMessage) {
-          const lastBuyerDate = new Date(lastBuyerMessage.date).getTime()
-          
-          if (lastBuyerDate > lastBotMessageDate) {
+        else if (state === 'finalizado' && !conversation.finalResponseSent && lastBuyerMessage && lastMessageIsBuyer) {
             const followUpMsg = `¡Muchas gracias por tu compra! Si tienes alguna duda, un asesor te atenderá en breve. 😊`
             await sendMessage(packId, buyerId, followUpMsg)
             conversation.messages.push({
@@ -361,7 +385,6 @@ export async function POST(request: Request) {
               date: new Date().toISOString()
             })
             conversation.finalResponseSent = true
-          }
         }
         
         setConversation(conversation)

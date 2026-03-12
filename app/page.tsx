@@ -182,13 +182,27 @@ export default function Dashboard() {
   useEffect(() => {
     if (!autoSync || !botState.enabled) return
     
-    const interval = setInterval(async () => {
+    let isMounted = true
+    let timeoutId: NodeJS.Timeout
+    
+    const doSync = async () => {
+      if (!isMounted) return
+      
       try {
-        const res = await fetch('/api/sync', { method: 'POST' })
+        const controller = new AbortController()
+        const timeoutAbort = setTimeout(() => controller.abort(), 30000) // 30s timeout
+        
+        const res = await fetch('/api/sync', { 
+          method: 'POST',
+          signal: controller.signal
+        })
+        clearTimeout(timeoutAbort)
+        
+        if (!isMounted) return
+        
         const data = await res.json()
         if (data.conversations && data.conversations.length > 0) {
           setConversations(data.conversations)
-          // Actualizar chats abiertos con los nuevos mensajes
           setOpenChats(prev => prev.map(chat => {
             const updated = data.conversations.find((c: Conversation) => c.id === chat.id)
             return updated || chat
@@ -197,12 +211,25 @@ export default function Dashboard() {
         if (data.messagesEnviados > 0) {
           addLog(`Bot envió ${data.messagesEnviados} mensaje(s)`)
         }
-      } catch {
-        // Silent fail for auto-sync
+      } catch (err) {
+        if (isMounted && err instanceof Error && err.name !== 'AbortError') {
+          console.error('[v0] Auto-sync error:', err)
+        }
       }
-    }, 5000)
+      
+      // Schedule next sync
+      if (isMounted) {
+        timeoutId = setTimeout(doSync, 5000)
+      }
+    }
     
-    return () => clearInterval(interval)
+    // Start first sync immediately
+    doSync()
+    
+    return () => {
+      isMounted = false
+      clearTimeout(timeoutId)
+    }
   }, [autoSync, botState.enabled, addLog])
 
   if (loading) {
