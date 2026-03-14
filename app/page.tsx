@@ -263,7 +263,13 @@ export default function Dashboard() {
               </Badge>
             </div>
             <div className="flex items-center gap-2 border-l border-border pl-4">
-              <span className="text-sm text-muted-foreground">Auto</span>
+              <Badge variant="outline" className="bg-green-600/20 text-green-400 border-green-600">
+                CRON
+              </Badge>
+              <span className="text-xs text-muted-foreground">(/api/cron)</span>
+            </div>
+            <div className="flex items-center gap-2 border-l border-border pl-4">
+              <span className="text-sm text-muted-foreground">Auto UI</span>
               <Switch 
                 checked={autoSync} 
                 onCheckedChange={setAutoSync}

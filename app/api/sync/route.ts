@@ -20,10 +20,18 @@ function detectProduct(title: string): { name: string; sheet: string; type: stri
   const t = title.toLowerCase()
   
   if (t.includes('roblox') || t.includes('robux')) {
-    if (t.includes('800')) return { name: '800 Robux', sheet: '800 Robux', type: 'roblox-robux', amount: '800 Robux' }
-    if (t.includes('400')) return { name: '400 Robux', sheet: '400 Robux', type: 'roblox-robux', amount: '400 Robux' }
-    if (t.includes('10')) return { name: 'Roblox 10 USD', sheet: 'Roblox 10 USD', type: 'roblox-usd', amount: '10 USD' }
-    if (t.includes('5')) return { name: 'Roblox 5 USD', sheet: 'Roblox 5 USD', type: 'roblox-usd', amount: '5 USD' }
+    // Detectar USD primero (más específico) - buscar "X usd" o "X dolar"
+    if ((t.includes('10') && (t.includes('usd') || t.includes('dolar') || t.includes('dólar'))) || 
+        (t.includes('10 usd'))) {
+      return { name: 'Roblox 10 USD', sheet: 'Roblox 10 USD', type: 'roblox-usd', amount: '10 USD' }
+    }
+    if ((t.includes('5') && (t.includes('usd') || t.includes('dolar') || t.includes('dólar'))) ||
+        (t.includes('5 usd'))) {
+      return { name: 'Roblox 5 USD', sheet: 'Roblox 5 USD', type: 'roblox-usd', amount: '5 USD' }
+    }
+    // Luego detectar Robux específicos (sin USD en el título)
+    if (t.includes('800') && !t.includes('usd')) return { name: '800 Robux', sheet: '800 Robux', type: 'roblox-robux', amount: '800 Robux' }
+    if (t.includes('400') && !t.includes('usd')) return { name: '400 Robux', sheet: '400 Robux', type: 'roblox-robux', amount: '400 Robux' }
   }
   
   if (t.includes('steam')) {
