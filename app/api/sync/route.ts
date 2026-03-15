@@ -124,7 +124,7 @@ export async function POST(request: Request) {
         const sellerMessagesFromML = mlMessages.filter(m => m.from.user_id.toString() === sellerId)
         const buyerMessagesFromML = mlMessages.filter(m => m.from.user_id.toString() !== sellerId)
         
-        console.log('[v0] Pack:', packId, 'Seller msgs:', sellerMessagesFromML.length, 'Buyer msgs:', buyerMessagesFromML.length, 'State:', conversation?.state || 'nuevo')
+        
         
         // Never mark as sellerRespondedManually - we trust the bot
         const sellerRespondedManually = false
@@ -146,11 +146,29 @@ export async function POST(request: Request) {
         
         // Initialize or update conversation
         if (!conversation) {
-          // Derive state from ML messages instead of starting from scratch
-          // If there are already bot messages, we're past 'inicio'
+          // Derive state from ML messages to avoid sending duplicate messages
           let derivedState: ConversationState = 'inicio'
-          if (sellerMessagesFromML.length > 0) {
-            // Bot already sent messages, so we're waiting for confirmation
+          let codeDelivered = false
+          let flowFinished = false
+          
+          // Check message content to determine actual state
+          const allSellerText = sellerMessagesFromML.map(m => m.text || '').join(' ').toLowerCase()
+          
+          if (allSellerText.includes('asesor se comunicará') || allSellerText.includes('disculpá las molestias')) {
+            // Ya se envió mensaje de sin stock
+            derivedState = 'sin_stock'
+            flowFinished = true
+          } else if (allSellerText.includes('tu código es') || allSellerText.includes('aquí está tu código') || allSellerText.includes('código:')) {
+            // Ya se entregó código
+            derivedState = 'codigo_entregado'
+            codeDelivered = true
+            flowFinished = true
+          } else if (sellerMessagesFromML.length >= 4) {
+            // Muchos mensajes del seller = probablemente ya terminó
+            derivedState = 'finalizado'
+            flowFinished = true
+          } else if (sellerMessagesFromML.length > 0) {
+            // Bot ya envió mensajes iniciales
             derivedState = 'esperando_confirmacion'
           }
           
@@ -162,9 +180,9 @@ export async function POST(request: Request) {
             buyerNickname,
             productTitle,
             state: derivedState,
-            codeDelivered: false,
-            flowFinished: false,
-            finalResponseSent: false,
+            codeDelivered,
+            flowFinished,
+            finalResponseSent: flowFinished,
             sellerResponded: sellerRespondedManually,
             lastMessageDate: messages[messages.length - 1]?.date || order.date_created,
             messages: [],
@@ -173,7 +191,7 @@ export async function POST(request: Request) {
             orderStatus
           }
           
-          console.log('[v0] New conversation created with derived state:', derivedState)
+          
         }
         
         // Merge ML messages with our stored bot messages count for tracking
@@ -207,6 +225,13 @@ export async function POST(request: Request) {
         // BOT LOGIC - Process flow based on state
         const state = conversation.state
         
+        // Skip terminal states - no more messages needed
+        if (state === 'sin_stock' || state === 'finalizado' || conversation.flowFinished) {
+          setConversation(conversation)
+          processed++
+          continue
+        }
+        
         // Count bot messages from ML
         const currentBotMessagesCount = sellerMessagesFromML.length
         
@@ -218,12 +243,7 @@ export async function POST(request: Request) {
         const lastMessageInML = allMessagesOrdered[allMessagesOrdered.length - 1]
         const lastMessageIsBuyer = lastMessageInML && lastMessageInML.from.user_id.toString() !== sellerId
         
-        // Debug: log last message details
-        if (lastMessageInML) {
-          console.log('[v0] LastMsg from:', lastMessageInML.from.user_id, 'sellerId:', sellerId, 'text:', (lastMessageInML.text || '').substring(0, 30))
-        }
         
-        console.log('[v0] State:', state, 'LastMsgIsBuyer:', lastMessageIsBuyer, 'BotMsgs:', currentBotMessagesCount)
         
         // ESTADO: inicio - Enviar mensaje inicial de bienvenida
         if (state === 'inicio' && currentBotMessagesCount === 0) {
@@ -262,8 +282,7 @@ export async function POST(request: Request) {
           // it means we already processed this and responded - skip
           const hasBuyerMessages = buyerMessagesFromML.length > 0
           
-          console.log('[v0] esperando_confirmacion - hasBuyerMessages:', hasBuyerMessages, 'lastBuyerMsg:', lastBuyerMessage?.text)
-          console.log('[v0] containsKeyword:', containsKeyword(lastBuyerMessage.text, CONFIRMATION_KEYWORDS))
+          
           
           // Process if there's a buyer message with confirmation keyword
           if (hasBuyerMessages && containsKeyword(lastBuyerMessage.text, CONFIRMATION_KEYWORDS)) {
